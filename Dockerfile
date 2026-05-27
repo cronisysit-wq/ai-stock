@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1
 
-# pandas / pandas-ta may compile native extensions
+# pandas / pandas-ta-classic may compile native extensions
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
