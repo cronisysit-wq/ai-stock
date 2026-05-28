@@ -1,5 +1,5 @@
 """
-Market data fetcher using yfinance with pandas-ta technical indicators.
+Market data fetcher using yfinance with pandas-based technical indicators.
 
 Provides helpers for historical OHLCV data, latest prices, ticker info,
 and a standard set of technical indicators (SMA, EMA, RSI, MACD, Bollinger
@@ -8,7 +8,7 @@ Bands, VWAP, ATR).
 
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+import numpy as np
 import logging
 from typing import Optional
 from datetime import datetime, timedelta, timezone
@@ -88,36 +88,56 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
         return df
 
     df = df.copy()
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"]
 
     # Moving Averages
-    df["sma_20"] = ta.sma(df["close"], length=20)
-    df["sma_50"] = ta.sma(df["close"], length=50)
-    df["ema_12"] = ta.ema(df["close"], length=12)
-    df["ema_26"] = ta.ema(df["close"], length=26)
+    df["sma_20"] = close.rolling(20).mean()
+    df["sma_50"] = close.rolling(50).mean()
+    df["ema_12"] = close.ewm(span=12, adjust=False).mean()
+    df["ema_26"] = close.ewm(span=26, adjust=False).mean()
 
     # RSI
-    df["rsi"] = ta.rsi(df["close"], length=14)
+    delta = close.diff()
+    gain = delta.clip(lower=0).rolling(14).mean()
+    loss = (-delta.clip(upper=0)).rolling(14).mean()
+    rs = gain / loss.replace(0, np.nan)
+    rsi = 100 - (100 / (1 + rs))
+    rsi = rsi.mask((loss == 0) & (gain > 0), 100.0)
+    rsi = rsi.mask((gain == 0) & (loss > 0), 0.0)
+    rsi = rsi.mask((gain == 0) & (loss == 0), 50.0)
+    df["rsi"] = rsi
 
     # MACD
-    macd = ta.macd(df["close"], fast=12, slow=26, signal=9)
-    if macd is not None:
-        df = pd.concat([df, macd], axis=1)
+    df["macd"] = df["ema_12"] - df["ema_26"]
+    df["macd_signal"] = df["macd"].ewm(span=9, adjust=False).mean()
+    df["macd_hist"] = df["macd"] - df["macd_signal"]
 
     # Bollinger Bands
-    bbands = ta.bbands(df["close"], length=20, std=2)
-    if bbands is not None:
-        df = pd.concat([df, bbands], axis=1)
+    bb_mid = close.rolling(20).mean()
+    bb_std = close.rolling(20).std()
+    df["bb_upper"] = bb_mid + 2 * bb_std
+    df["bb_lower"] = bb_mid - 2 * bb_std
+    df["bb_mid"] = bb_mid
 
-    # VWAP (only works for intraday with full OHLCV)
-    try:
-        vwap = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-        if vwap is not None:
-            df["vwap"] = vwap
-    except Exception:
-        pass
+    # VWAP (rolling approximation for daily bars)
+    typical_price = (high + low + close) / 3
+    vol_sum = volume.rolling(20).sum()
+    df["vwap"] = (typical_price * volume).rolling(20).sum() / vol_sum.replace(0, np.nan)
 
     # ATR for volatility
-    df["atr"] = ta.atr(df["high"], df["low"], df["close"], length=14)
+    tr = pd.concat(
+        [
+            high - low,
+            (high - close.shift()).abs(),
+            (low - close.shift()).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    df["atr"] = tr.rolling(14).mean()
+    df["atr_pct"] = df["atr"] / close * 100
 
     return df
 

@@ -7,7 +7,6 @@ Each test builds a synthetic DataFrame that guarantees a specific signal outcome
 import pytest
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
 from datetime import datetime, timedelta
 
 from trading.strategies import (
@@ -16,6 +15,7 @@ from trading.strategies import (
     VWAPStrategy,
     SignalType,
 )
+from trading.market_data import add_indicators
 
 
 # ---------------------------------------------------------------------------
@@ -43,10 +43,8 @@ def _base_df(n: int = 60) -> pd.DataFrame:
 
 
 def _add_rsi(df: pd.DataFrame) -> pd.DataFrame:
-    """Add RSI column using pandas_ta (matches strategy's internal computation)."""
-    df = df.copy()
-    df["rsi"] = ta.rsi(df["close"], length=14)
-    return df
+    """Add RSI column using shared indicator helper."""
+    return add_indicators(df)
 
 
 def _ma_crossover_buy_df() -> pd.DataFrame:

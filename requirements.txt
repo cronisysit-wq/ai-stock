@@ -5,7 +5,6 @@ alpaca-trade-api>=3.0.0
 yfinance>=0.2.36
 pandas>=2.1.0
 numpy>=1.26.0
-pandas-ta-classic>=0.3.14b1
 plotly>=5.18.0
 pydantic>=2.5.0
 pydantic-settings>=2.1.0
