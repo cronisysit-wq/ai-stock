@@ -9,6 +9,14 @@ import streamlit as st
 import pandas as pd
 import time as _time
 
+from ui.auto_scan import (
+    AUTO_REFRESH_SECONDS,
+    DEFAULT_SCAN_LIMIT,
+    format_scan_status,
+    should_run_scan,
+    trigger_autorefresh,
+)
+
 st.set_page_config(page_title="Strategy Signals", page_icon="📊", layout="wide")
 
 st.markdown("""
@@ -71,7 +79,8 @@ except Exception:
 
 for k, v in {
     "ss_session": None,
-    "ss_preset": "robinhood",
+    "ss_preset": "sp500_full",
+    "ss_last_scan_ts": None,
     "approval_queue": None,
     "broker": None,
     "risk_manager": None,
@@ -95,8 +104,8 @@ if st.session_state["risk_manager"] is None and SIZER_OK:
 
 st.title("📊 Strategy Signals + Sentiment")
 st.markdown(
-    "<p class='sub'>Full US universe scan — ranked <strong>STRONG BUY first</strong>, "
-    "then INVEST, by composite strategy + sentiment score. Prices use live quotes when available.</p>",
+    "<p class='sub'>S&amp;P 500 scan loads automatically (250 stocks by default) — ranked "
+    "<strong>STRONG BUY first</strong>, then INVEST. Auto-refreshes every 15 minutes.</p>",
     unsafe_allow_html=True,
 )
 st.markdown(
@@ -159,7 +168,7 @@ with c1:
     sel = st.selectbox(
         "Stock universe",
         preset_keys,
-        index=preset_vals.index(cur_preset) if cur_preset in preset_vals else 0,
+        index=preset_vals.index(cur_preset) if cur_preset in preset_vals else 2,
     )
     st.session_state["ss_preset"] = SCAN_PRESETS[sel]
     universe_count = len(get_universe(st.session_state["ss_preset"]))
@@ -168,13 +177,29 @@ with c2:
 with c3:
     limit = st.number_input(
         "Limit", 50, 12000,
-        value=min(300, universe_count),
+        value=min(DEFAULT_SCAN_LIMIT, universe_count),
         step=50,
         disabled=scan_all,
-        help="Start with 200–500 for faster results",
+        help="Default 250 — use 500 for full S&P sweep",
     )
 with c4:
     workers = st.slider("Speed", 4, 16, 10)
+
+auto_refresh = st.checkbox(
+    "Auto-refresh scan every 15 minutes",
+    value=True,
+    help="Re-runs the full scan automatically. Turn off to save API/time on Railway.",
+)
+if auto_refresh:
+    trigger_autorefresh(AUTO_REFRESH_SECONDS, key="ss_autorefresh")
+
+refresh_col1, refresh_col2, refresh_col3 = st.columns([2, 1, 2])
+with refresh_col1:
+    scan_clicked = st.button("🔄 Refresh scan now", type="primary", use_container_width=True)
+with refresh_col2:
+    refresh_prices = st.button("↻ Prices only", use_container_width=True)
+with refresh_col3:
+    st.caption(format_scan_status(st.session_state.get("ss_last_scan_ts"), auto_refresh))
 
 ai_col1, ai_col2 = st.columns([1, 3])
 with ai_col1:
@@ -197,17 +222,18 @@ st.caption(
 if universe_count > 1000 and scan_all:
     st.warning(
         f"Scanning all **{universe_count:,}** stocks may take many hours. "
-        f"Use **Limit** 300–500 for daily scans."
+        f"Use **Limit** 250–500 for daily scans."
     )
 
-col_scan, col_refresh = st.columns([3, 1])
-with col_scan:
-    scan_clicked = st.button("▶ Scan & Rank All Stocks", type="primary", use_container_width=True)
-with col_refresh:
-    refresh_prices = st.button("↻ Refresh top prices", use_container_width=True)
+run_scan = should_run_scan(
+    session_key="ss_session",
+    last_ts_key="ss_last_scan_ts",
+    force=scan_clicked,
+    auto_refresh=auto_refresh,
+)
 
-if scan_clicked:
-    progress = st.progress(0, text="Starting...")
+if run_scan:
+    progress = st.progress(0, text="Starting scan…")
     actual_limit = None if scan_all else int(limit)
 
     def _cb(d, t):
@@ -222,6 +248,7 @@ if scan_clicked:
             enable_ai_notes=enable_ai_notes,
         )
         st.session_state["ss_session"] = session
+        st.session_state["ss_last_scan_ts"] = _time.time()
         progress.empty()
         ai_msg = ""
         if session.ai_notes_count:
@@ -455,8 +482,8 @@ if session and session.results:
             except Exception as ex:
                 st.error(str(ex))
 
-else:
+elif st.session_state.get("ss_session") is None:
     st.info(
-        f"Click **Scan & Rank All Stocks**. Universe: **{universe_count:,}** symbols. "
-        f"Start with Limit **300**. STRONG BUY names appear at the top automatically."
+        f"Scanning **{min(DEFAULT_SCAN_LIMIT, universe_count)}** stocks from "
+        f"**{sel}** — first load takes 1–3 minutes on cloud."
     )

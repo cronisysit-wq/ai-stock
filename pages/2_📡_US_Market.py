@@ -15,6 +15,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import time as _time
 
+from ui.auto_scan import (
+    AUTO_REFRESH_SECONDS,
+    DEFAULT_SCAN_LIMIT,
+    format_scan_status,
+    should_run_scan,
+    trigger_autorefresh,
+)
+
 st.set_page_config(
     page_title="US Market | AI Trading Assistant",
     page_icon="📡",
@@ -65,6 +73,8 @@ except Exception as e:
 
 for key, default in {
     "us_sentiment_session": None,
+    "us_sentiment_preset": "sp500_full",
+    "us_last_scan_ts": None,
     "us_sr_note": None,
     "us_sr_ticker": "",
 }.items():
@@ -122,23 +132,55 @@ with st.expander("🔎 Single stock — sentiment deep dive", expanded=False):
 # ── Scan controls ─────────────────────────────────────────────────────────────
 st.markdown("<div class='sh'>1 · US Market Scan</div>", unsafe_allow_html=True)
 
+preset_keys = list(US_SENTIMENT_PRESETS.keys())
+preset_vals = list(US_SENTIMENT_PRESETS.values())
+cur_us_preset = st.session_state.get("us_sentiment_preset", "sp500_full")
+
 c1, c2, c3, c4 = st.columns(4)
 with c1:
-    preset_label = st.selectbox("Universe", list(US_SENTIMENT_PRESETS.keys()))
+    preset_label = st.selectbox(
+        "Universe",
+        preset_keys,
+        index=preset_vals.index(cur_us_preset) if cur_us_preset in preset_vals else 2,
+    )
     preset = US_SENTIMENT_PRESETS[preset_label]
+    st.session_state["us_sentiment_preset"] = preset
 with c2:
-    top_n = st.slider("Top results", 10, 100, 40)
+    top_n = st.slider("Top results", 10, 100, 50)
 with c3:
-    scan_limit = st.number_input("Max tickers to scan", 20, 500, 120, step=10,
-                                 help="Limit for speed — full universe can take several minutes")
+    scan_limit = st.number_input(
+        "Max tickers to scan",
+        50, 500,
+        min(DEFAULT_SCAN_LIMIT, 500),
+        step=50,
+        help="Default 250 — loads automatically; use 500 for full S&P sweep",
+    )
 with c4:
     workers = st.slider("Parallel workers", 4, 16, 10)
 
-run_scan = st.button("🔍 Scan US Market Sentiment", type="primary", use_container_width=True)
+auto_refresh = st.checkbox(
+    "Auto-refresh scan every 15 minutes",
+    value=True,
+    help="Re-runs sentiment sweep automatically",
+)
+if auto_refresh:
+    trigger_autorefresh(AUTO_REFRESH_SECONDS, key="us_autorefresh")
 
-if run_scan:
+refresh_col1, refresh_col2 = st.columns([1, 3])
+with refresh_col1:
+    run_scan = st.button("🔄 Refresh scan now", type="primary", use_container_width=True)
+with refresh_col2:
+    st.caption(format_scan_status(st.session_state.get("us_last_scan_ts"), auto_refresh))
+
+do_scan = should_run_scan(
+    session_key="us_sentiment_session",
+    last_ts_key="us_last_scan_ts",
+    force=run_scan,
+    auto_refresh=auto_refresh,
+)
+
+if do_scan:
     progress = st.progress(0, text="Starting US sentiment sweep...")
-    t0 = _time.time()
 
     def _cb(done, total):
         progress.progress(min(1.0, done / max(1, total)), text=f"Analyzing {done}/{total} tickers...")
@@ -147,6 +189,7 @@ if run_scan:
         scanner = USMarketSentimentScanner(max_workers=workers, top_n=top_n)
         session = scanner.scan(preset=preset, progress_callback=_cb, limit=int(scan_limit))
         st.session_state["us_sentiment_session"] = session
+        st.session_state["us_last_scan_ts"] = _time.time()
         st.session_state["us_sr_note"] = None
         progress.empty()
         st.success(
@@ -156,6 +199,8 @@ if run_scan:
     except Exception as ex:
         progress.empty()
         st.error(f"Scan failed: {ex}")
+elif st.session_state.get("us_sentiment_session") is None:
+    st.info(f"Loading first scan — **{scan_limit}** tickers from **{preset_label}** (~1–3 min)…")
 
 session = st.session_state.get("us_sentiment_session")
 
@@ -326,6 +371,5 @@ if session and session.results:
 
 else:
     st.info(
-        "Select a universe and click **Scan US Market Sentiment** to sweep the US market. "
-        "Start with S&P 500 and 120 tickers for a fast scan (~1-2 min)."
+        "Scan in progress or no results yet — try **Refresh scan now** or wait for auto-refresh."
     )
