@@ -59,6 +59,7 @@ SCANNER_OK = False
 ADVISOR_OK = False
 try:
     from analysis.us_market_sentiment import USMarketSentimentScanner, US_SENTIMENT_PRESETS
+    from analysis.universe import get_price_bounds
     SCANNER_OK = True
 except Exception as e:
     st.error(f"US Sentiment Scanner: {e}")
@@ -171,6 +172,12 @@ with refresh_col1:
     run_scan = st.button("🔄 Refresh scan now", type="primary", use_container_width=True)
 with refresh_col2:
     st.caption(format_scan_status(st.session_state.get("us_last_scan_ts"), auto_refresh))
+
+if get_price_bounds(preset) != (None, None):
+    st.info(
+        "💰 **Price-filter mode** — sweeps US listings and ranks only tickers in the "
+        "selected price range (penny / $1–$10 / under $10)."
+    )
 
 do_scan = should_run_scan(
     session_key="us_sentiment_session",

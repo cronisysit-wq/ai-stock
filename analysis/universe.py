@@ -16,7 +16,7 @@ Usage:
     tickers = get_universe("etf")            # major ETFs
 """
 
-from typing import List
+from typing import List, Optional
 import logging
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,54 @@ def get_robinhood_universe(include_etfs: bool = True) -> List[str]:
     return out
 
 
+# Price-filtered presets scan Robinhood-scale US stocks and keep names in range at scan time.
+PRICE_FILTER_PRESETS = {
+    "penny_under_1": (0.01, 1.0),
+    "penny_under_5": (0.01, 5.0),
+    "price_1_10": (1.0, 10.0),
+    "under_10": (0.01, 10.0),
+}
+
+
+def get_price_bounds(preset: str) -> tuple[Optional[float], Optional[float]]:
+    """Return (min_price, max_price) for price-filter presets, else (None, None)."""
+    bounds = PRICE_FILTER_PRESETS.get(preset.lower().strip())
+    if not bounds:
+        return None, None
+    return bounds
+
+
+def price_in_range(price: float, min_price: Optional[float], max_price: Optional[float]) -> bool:
+    """True if price is within optional min/max bounds."""
+    if price <= 0:
+        return False
+    if min_price is not None and price < min_price:
+        return False
+    if max_price is not None and price > max_price:
+        return False
+    return True
+
+
+def resolve_scan_universe(
+    preset: str,
+    result_limit: Optional[int] = None,
+) -> tuple[List[str], Optional[float], Optional[float]]:
+    """
+    Tickers to scan plus optional price bounds.
+
+    Price-filter presets scan a large US candidate pool and filter by live price.
+    """
+    min_price, max_price = get_price_bounds(preset)
+    tickers = get_universe(preset)
+    if min_price is not None or max_price is not None:
+        cap = result_limit or 250
+        candidate_cap = min(len(tickers), max(cap * 25, 3000))
+        tickers = tickers[:candidate_cap]
+    elif result_limit and result_limit > 0:
+        tickers = tickers[:result_limit]
+    return tickers, min_price, max_price
+
+
 def get_universe(preset: str = "all", min_price: float = 0.0, dedupe: bool = True) -> List[str]:
     """
     Return a list of tickers for the chosen preset.
@@ -216,6 +264,10 @@ def get_universe(preset: str = "all", min_price: float = 0.0, dedupe: bool = Tru
         "sp500_full"  — Full S&P 500 from Wikipedia (~503)
         "robinhood"   — Full US listings via NASDAQ Trader (~8,000–11,000, Robinhood-scale)
         "robinhood_stocks" — US stocks only (no ETFs)
+        "penny_under_1"  — US stocks; scan filters to price < $1
+        "penny_under_5"  — US stocks; scan filters to price < $5 (penny / micro-cap)
+        "price_1_10"     — US stocks; scan filters to $1–$10
+        "under_10"       — US stocks; scan filters to price < $10
         "nasdaq100"   — NASDAQ-100 additions
         "day_trading" — High-vol day-trading favorites
         "etf"         — Major ETFs
@@ -242,6 +294,8 @@ def get_universe(preset: str = "all", min_price: float = 0.0, dedupe: bool = Tru
     elif preset == "robinhood":
         tickers = get_robinhood_universe(include_etfs=True)
     elif preset == "robinhood_stocks":
+        tickers = get_robinhood_universe(include_etfs=False)
+    elif preset in PRICE_FILTER_PRESETS:
         tickers = get_robinhood_universe(include_etfs=False)
     elif preset == "nasdaq100":
         tickers = NASDAQ100_EXTRA

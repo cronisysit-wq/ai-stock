@@ -46,7 +46,7 @@ QUEUE_OK = False
 SIZER_OK = False
 
 try:
-    from analysis.universe import get_universe
+    from analysis.universe import get_universe, get_price_bounds
     from analysis.strategy_sentiment_scanner import (
         StrategySentimentScanner,
         SCAN_PRESETS,
@@ -218,6 +218,11 @@ st.caption(
     f"Universe: **{universe_count:,}** symbols · "
     f"**STRONG BUY** rows always sorted to top · Prices: live → market → intraday → daily close"
 )
+if get_price_bounds(st.session_state["ss_preset"]) != (None, None):
+    st.info(
+        "💰 **Price-filter mode** — scans US listings and keeps only tickers in the selected "
+        "price band. First load may take a few extra minutes vs S&P 500."
+    )
 
 if universe_count > 1000 and scan_all:
     st.warning(

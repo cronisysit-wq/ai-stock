@@ -350,6 +350,163 @@ class AnalystResponse:
         return f"{badge}\n\n{self.explanation}{self.disclaimer}"
 
 
+_STOCK_SYSTEM = (
+    "You are a stock market educational AI assistant. Explain technical and sentiment data "
+    "to help users understand market conditions. You NEVER give financial advice, never tell "
+    "users to buy or sell, and always note that results are not guaranteed."
+)
+
+
+def _stock_prompt(analysis: "StockAnalysis", sentiment: Optional["SentimentResult"] = None) -> str:
+    """Build ChatGPT/Gemini prompt for single-stock educational analysis."""
+    ind = analysis.indicators
+    sent_block = ""
+    if sentiment and sentiment.is_valid:
+        sent_block = f"""
+Sentiment Context:
+- News sentiment: {sentiment.news_sentiment_label} ({sentiment.news_sentiment_score:.0f}/100)
+- Analyst consensus: {sentiment.analyst_recommendation} ({sentiment.num_analyst_opinions} analysts)
+- Analyst price target: ${sentiment.analyst_target_price:,.2f} ({sentiment.price_vs_target_pct:+.1f}% upside) if available
+- 52-week position: {sentiment.price_vs_52w_high_pct:+.1f}% from 52w high
+- Short interest ratio: {sentiment.short_ratio if sentiment.short_ratio else 'N/A'}
+- Earnings growth YoY: {f'{sentiment.earnings_growth*100:.1f}%' if sentiment.earnings_growth else 'N/A'}
+- Broad market: {sentiment.market_trend}
+- Recent catalysts: {sentiment.catalyst_notes[:300]}
+"""
+
+    return f"""Stock: {analysis.ticker}
+Current Price: ${analysis.current_price:,.2f}
+Signal: {analysis.signal} (Overall Score: {analysis.overall_score:.0f}/100)
+Risk Score: {analysis.risk_score:.0f}/100
+Confidence: {analysis.confidence:.0f}/100
+
+Technical Indicators:
+- RSI(14): {ind.get('rsi', 'N/A')}
+- MACD Histogram: {ind.get('macd_hist', 'N/A')}
+- SMA20: {ind.get('sma_20', 'N/A')}
+- SMA50: {ind.get('sma_50', 'N/A')}
+- Bollinger Band position: {ind.get('bb_position', 'N/A')}
+- Volume Ratio: {ind.get('volume_ratio', 'N/A')}
+- ATR%: {ind.get('atr_pct', 'N/A')}
+- Trend Score: {analysis.trend_score:.0f}/100
+- Momentum Score: {analysis.momentum_score:.0f}/100
+- Volume Score: {analysis.volume_score:.0f}/100
+
+Rule-engine levels (NOT personalized advice):
+- Stop-loss: ${analysis.stop_loss_price:,.2f}
+- Take-profit: ${analysis.take_profit_price:,.2f}
+- Support: ${analysis.support_level:,.2f}
+- Resistance: ${analysis.resistance_level:,.2f}
+- Timeframe bias: {analysis.timeframe_bias}
+{sent_block}
+Strategy summary: {analysis.reason_summary[:300]}
+
+Provide a 3-4 paragraph educational explanation that:
+1. Explains what the technical indicators say about this stock's current pattern
+2. Notes key risk factors and what could invalidate the signal
+3. If sentiment data is available, explain how news/analyst sentiment aligns or conflicts with technicals
+4. Mentions what a day trader should watch (volume, levels, catalysts)
+
+RULES:
+- Never say "you should buy" or "you should sell" — use "the pattern suggests" or "technically"
+- Never guarantee profit
+- Keep the tone educational and data-driven
+- Be concise (3-4 paragraphs max)
+"""
+
+
+def _scan_prompt(scan_result: "ScanResult", sentiment: Optional["SentimentResult"] = None) -> str:
+    """Build prompt for day-trading scan result explanation."""
+    sent_block = ""
+    if sentiment and sentiment.is_valid:
+        sent_block = f"""
+Sentiment:
+- News: {sentiment.news_sentiment_label} ({sentiment.news_sentiment_score:.0f}/100)
+- Analyst: {sentiment.analyst_recommendation} | Target: ${sentiment.analyst_target_price or 'N/A'}
+- Market: {sentiment.market_trend} | Catalysts: {sentiment.catalyst_notes[:200]}
+"""
+
+    return f"""Explain why {scan_result.ticker} appeared in today's market scan for day trading candidates. Be educational and objective. Never guarantee profit. Never say "buy now" or "sell now".
+
+Scanner data for {scan_result.ticker}:
+- Price: ${scan_result.price:,.2f}
+- 1-day change: {scan_result.change_pct_1d:+.2f}%
+- 5-day change: {scan_result.change_pct_5d:+.2f}%
+- Volume ratio vs 20-day avg: {scan_result.volume_ratio:.2f}x
+- RSI: {scan_result.rsi:.1f}
+- MACD histogram: {scan_result.macd_hist:.4f}
+- ATR (daily range%): {scan_result.atr_pct:.2f}%
+- Gap at open: {scan_result.gap_pct:+.2f}%
+- Volume score: {scan_result.volume_score:.0f}/100
+- Momentum score: {scan_result.momentum_score:.0f}/100
+- RSI zone score: {scan_result.rsi_score:.0f}/100
+- Trend score: {scan_result.trend_score:.0f}/100
+- Overall day-trading score: {scan_result.overall_score:.1f}/100
+- Signal: {scan_result.signal}
+- Rule-engine stop-loss: ${scan_result.stop_loss_price:,.2f}
+- Rule-engine take-profit: ${scan_result.take_profit_price:,.2f}
+{sent_block}
+
+Write 2-3 paragraphs explaining:
+1. Why this stock has a high day-trading score today (what signals are aligned)
+2. Key risk factors a trader should be aware of
+3. How sentiment/news context supports or conflicts with the technical pattern
+"""
+
+
+def _sentiment_prompt(sentiment: "SentimentResult") -> str:
+    """Build prompt for sentiment-only explanation."""
+    headlines_block = "\n".join(
+        [f"  - [{n.sentiment_label}] {n.title[:100]} ({n.source}, {n.published})"
+         for n in sentiment.news_items[:8]]
+    ) or "  No recent headlines found."
+
+    return f"""Explain the sentiment picture for {sentiment.ticker} to help a trader understand market mood. Never give financial advice. Never say buy or sell.
+
+Ticker: {sentiment.ticker}
+Overall sentiment score: {sentiment.overall_sentiment_score:.0f}/100 — {sentiment.overall_sentiment_label}
+News sentiment: {sentiment.news_sentiment_label} ({sentiment.news_sentiment_score:.0f}/100)
+Analyst consensus: {sentiment.analyst_recommendation} ({sentiment.num_analyst_opinions} analysts)
+Analyst price target: {'${:.2f} ({:+.1f}% from current)'.format(sentiment.analyst_target_price, sentiment.price_vs_target_pct) if sentiment.analyst_target_price else 'N/A'}
+52-week position: {sentiment.price_vs_52w_high_pct:+.1f}% from high / ${sentiment.week_52_low or 'N/A'} - ${sentiment.week_52_high or 'N/A'}
+Beta: {sentiment.beta or 'N/A'}
+Short interest ratio: {sentiment.short_ratio or 'N/A'} days to cover
+Earnings growth YoY: {f'{sentiment.earnings_growth*100:.1f}%' if sentiment.earnings_growth else 'N/A'}
+Revenue growth YoY: {f'{sentiment.revenue_growth*100:.1f}%' if sentiment.revenue_growth else 'N/A'}
+Broad market: {sentiment.market_trend} (5-day SPY volatility proxy: {sentiment.vix_proxy:.1f}%)
+
+Recent headlines ({len(sentiment.news_items)} total):
+{headlines_block}
+
+Detected catalysts:
+{sentiment.catalyst_notes}
+
+Explain in 2-3 paragraphs:
+1. What the overall sentiment picture looks like and why
+2. Any notable catalysts or risk events from the headlines
+3. How the fundamental data supports or contradicts the sentiment
+"""
+
+
+def _compare_prompt(ranked_stocks: list) -> str:
+    """Build prompt comparing top two ranked stocks."""
+    top = ranked_stocks[0].analysis
+    second = ranked_stocks[1].analysis
+
+    return f"""Compare these two stocks from a technical analysis perspective. Never guarantee returns. Never say buy or sell.
+
+Stock 1: {top.ticker} — Score {top.overall_score:.0f}/100, Signal: {top.signal}
+- Trend: {top.trend_score:.0f} | Momentum: {top.momentum_score:.0f} | Risk: {top.risk_score:.0f}
+- RSI: {top.indicators.get('rsi','N/A')} | ATR%: {top.indicators.get('atr_pct','N/A')}
+
+Stock 2: {second.ticker} — Score {second.overall_score:.0f}/100, Signal: {second.signal}
+- Trend: {second.trend_score:.0f} | Momentum: {second.momentum_score:.0f} | Risk: {second.risk_score:.0f}
+- RSI: {second.indicators.get('rsi','N/A')} | ATR%: {second.indicators.get('atr_pct','N/A')}
+
+In 2 paragraphs, explain why {top.ticker} ranks higher than {second.ticker} based on the technical indicators, and what risk factors each carries.
+"""
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 def explain_signal(signal: SignalResult, df: Optional[pd.DataFrame] = None) -> str:
@@ -377,7 +534,7 @@ def explain_stock_analysis(
     Uses Gemini AI if GEMINI_API_KEY is configured, else rule-based.
     """
     try:
-        text, provider = call_ai_stock(_stock_prompt(analysis, sentiment))
+        text, provider = call_ai_stock(_stock_prompt(analysis, sentiment), system=_STOCK_SYSTEM)
         if text:
             return AnalystResponse(
                 explanation=text,
@@ -433,70 +590,13 @@ def explain_ranking_comparison(ranked_stocks: list) -> str:
         return f"Comparison unavailable: {e}{_DISCLAIMER}"
 
 
-# ── Gemini implementations ─────────────────────────────────────────────────────
+# ── Gemini implementations (thin wrappers — prompts live above) ────────────────
 
 def _gemini_explain_stock(analysis: "StockAnalysis", sentiment: Optional["SentimentResult"]) -> AnalystResponse:
     """Use Gemini to explain a StockAnalysis."""
-    ind = analysis.indicators
-    sent_block = ""
-    if sentiment and sentiment.is_valid:
-        sent_block = f"""
-Sentiment Context:
-- News sentiment: {sentiment.news_sentiment_label} ({sentiment.news_sentiment_score:.0f}/100)
-- Analyst consensus: {sentiment.analyst_recommendation} ({sentiment.num_analyst_opinions} analysts)
-- Analyst price target: ${sentiment.analyst_target_price:,.2f} ({sentiment.price_vs_target_pct:+.1f}% upside) if available
-- 52-week position: {sentiment.price_vs_52w_high_pct:+.1f}% from 52w high
-- Short interest ratio: {sentiment.short_ratio if sentiment.short_ratio else 'N/A'}
-- Earnings growth YoY: {f'{sentiment.earnings_growth*100:.1f}%' if sentiment.earnings_growth else 'N/A'}
-- Broad market: {sentiment.market_trend}
-- Recent catalysts: {sentiment.catalyst_notes[:300]}
-"""
-
-    prompt = f"""You are a stock market educational AI assistant. Your job is to explain technical and sentiment data to help users understand market conditions. You NEVER give financial advice, never tell users to buy or sell, and always note that results are not guaranteed.
-
-Stock: {analysis.ticker}
-Current Price: ${analysis.current_price:,.2f}
-Signal: {analysis.signal} (Overall Score: {analysis.overall_score:.0f}/100)
-Risk Score: {analysis.risk_score:.0f}/100
-Confidence: {analysis.confidence:.0f}/100
-
-Technical Indicators:
-- RSI(14): {ind.get('rsi', 'N/A')}
-- MACD Histogram: {ind.get('macd_hist', 'N/A')}
-- SMA20: {ind.get('sma_20', 'N/A')}
-- SMA50: {ind.get('sma_50', 'N/A')}
-- Bollinger Band position: {ind.get('bb_position', 'N/A')}
-- Volume Ratio: {ind.get('volume_ratio', 'N/A')}
-- ATR%: {ind.get('atr_pct', 'N/A')}
-- Trend Score: {analysis.trend_score:.0f}/100
-- Momentum Score: {analysis.momentum_score:.0f}/100
-- Volume Score: {analysis.volume_score:.0f}/100
-
-Rule-engine levels (NOT personalized advice):
-- Stop-loss: ${analysis.stop_loss_price:,.2f}
-- Take-profit: ${analysis.take_profit_price:,.2f}
-- Support: ${analysis.support_level:,.2f}
-- Resistance: ${analysis.resistance_level:,.2f}
-- Timeframe bias: {analysis.timeframe_bias}
-{sent_block}
-Strategy summary: {analysis.reason_summary[:300]}
-
-Please provide a 3-4 paragraph educational explanation that:
-1. Explains what the technical indicators say about this stock's current pattern
-2. Notes key risk factors and what could invalidate the signal
-3. If sentiment data is available, explain how news/analyst sentiment aligns or conflicts with technicals
-4. Mentions the timeframe this pattern typically applies to (short-term day trade, swing, etc.)
-
-RULES:
-- Never say "you should buy" or "you should sell" — use "the pattern suggests" or "technically"
-- Never guarantee profit
-- Keep the tone educational and data-driven
-- Be concise (3-4 paragraphs max)
-"""
-    response_text = _call_gemini(prompt)
+    response_text = _call_gemini(f"{_STOCK_SYSTEM}\n\n{_stock_prompt(analysis, sentiment)}")
     if not response_text:
         return _rule_explain_stock(analysis, sentiment)
-
     return AnalystResponse(
         explanation=response_text,
         ai_powered=True,
@@ -506,44 +606,7 @@ RULES:
 
 def _gemini_explain_scan(scan_result: "ScanResult", sentiment: Optional["SentimentResult"]) -> AnalystResponse:
     """Use Gemini to explain a scanner result."""
-    sent_block = ""
-    if sentiment and sentiment.is_valid:
-        sent_block = f"""
-Sentiment:
-- News: {sentiment.news_sentiment_label} ({sentiment.news_sentiment_score:.0f}/100)
-- Analyst: {sentiment.analyst_recommendation} | Target: ${sentiment.analyst_target_price or 'N/A'}
-- Market: {sentiment.market_trend} | Catalysts: {sentiment.catalyst_notes[:200]}
-"""
-
-    prompt = f"""You are a stock market educational AI. Explain why {scan_result.ticker} appeared in today's market scan for day trading candidates. Be educational and objective. Never guarantee profit. Never say "buy now" or "sell now".
-
-Scanner data for {scan_result.ticker}:
-- Price: ${scan_result.price:,.2f}
-- 1-day change: {scan_result.change_pct_1d:+.2f}%
-- 5-day change: {scan_result.change_pct_5d:+.2f}%
-- Volume ratio vs 20-day avg: {scan_result.volume_ratio:.2f}x
-- RSI: {scan_result.rsi:.1f}
-- MACD histogram: {scan_result.macd_hist:.4f}
-- ATR (daily range%): {scan_result.atr_pct:.2f}%
-- Gap at open: {scan_result.gap_pct:+.2f}%
-- Volume score: {scan_result.volume_score:.0f}/100
-- Momentum score: {scan_result.momentum_score:.0f}/100
-- RSI zone score: {scan_result.rsi_score:.0f}/100
-- Trend score: {scan_result.trend_score:.0f}/100
-- Overall day-trading score: {scan_result.overall_score:.1f}/100
-- Signal: {scan_result.signal}
-- Rule-engine stop-loss: ${scan_result.stop_loss_price:,.2f}
-- Rule-engine take-profit: ${scan_result.take_profit_price:,.2f}
-{sent_block}
-
-Write 2-3 paragraphs explaining:
-1. Why this stock has a high day-trading score today (what signals are aligned)
-2. Key risk factors a trader should be aware of
-3. How sentiment/news context supports or conflicts with the technical pattern
-
-Use educational, data-driven language. Never guarantee returns.
-"""
-    text = _call_gemini(prompt)
+    text = _call_gemini(_scan_prompt(scan_result, sentiment))
     if not text:
         return _rule_explain_scan(scan_result, sentiment)
     return AnalystResponse(explanation=text, ai_powered=True)
@@ -551,39 +614,7 @@ Use educational, data-driven language. Never guarantee returns.
 
 def _gemini_explain_sentiment(sentiment: "SentimentResult") -> AnalystResponse:
     """Use Gemini to explain sentiment data."""
-    headlines_block = "\n".join(
-        [f"  - [{n.sentiment_label}] {n.title[:100]} ({n.source}, {n.published})"
-         for n in sentiment.news_items[:8]]
-    ) or "  No recent headlines found."
-
-    prompt = f"""You are a stock market educational AI. Explain the sentiment picture for {sentiment.ticker} to help a trader understand market mood. Never give financial advice. Never say buy or sell.
-
-Ticker: {sentiment.ticker}
-Overall sentiment score: {sentiment.overall_sentiment_score:.0f}/100 — {sentiment.overall_sentiment_label}
-News sentiment: {sentiment.news_sentiment_label} ({sentiment.news_sentiment_score:.0f}/100)
-Analyst consensus: {sentiment.analyst_recommendation} ({sentiment.num_analyst_opinions} analysts)
-Analyst price target: {'${:.2f} ({:+.1f}% from current)'.format(sentiment.analyst_target_price, sentiment.price_vs_target_pct) if sentiment.analyst_target_price else 'N/A'}
-52-week position: {sentiment.price_vs_52w_high_pct:+.1f}% from high / ${sentiment.week_52_low or 'N/A'} - ${sentiment.week_52_high or 'N/A'}
-Beta: {sentiment.beta or 'N/A'}
-Short interest ratio: {sentiment.short_ratio or 'N/A'} days to cover
-Earnings growth YoY: {f'{sentiment.earnings_growth*100:.1f}%' if sentiment.earnings_growth else 'N/A'}
-Revenue growth YoY: {f'{sentiment.revenue_growth*100:.1f}%' if sentiment.revenue_growth else 'N/A'}
-Broad market: {sentiment.market_trend} (5-day SPY volatility proxy: {sentiment.vix_proxy:.1f}%)
-
-Recent headlines ({len(sentiment.news_items)} total):
-{headlines_block}
-
-Detected catalysts:
-{sentiment.catalyst_notes}
-
-Explain in 2-3 paragraphs:
-1. What the overall sentiment picture looks like and why
-2. Any notable catalysts or risk events from the headlines
-3. How the fundamental data (PE, analyst targets, short interest, growth) supports or contradicts the sentiment
-
-Use factual, educational language. Do not predict prices.
-"""
-    text = _call_gemini(prompt)
+    text = _call_gemini(_sentiment_prompt(sentiment))
     if not text:
         return _rule_explain_sentiment(sentiment)
     return AnalystResponse(explanation=text, ai_powered=True)
@@ -591,22 +622,7 @@ Use factual, educational language. Do not predict prices.
 
 def _gemini_compare(ranked_stocks: list) -> AnalystResponse:
     """Use Gemini to compare top 2 ranked stocks."""
-    top = ranked_stocks[0].analysis
-    second = ranked_stocks[1].analysis
-
-    prompt = f"""You are a stock market educational AI. Compare these two stocks from a technical analysis perspective. Never guarantee returns. Never say buy or sell.
-
-Stock 1: {top.ticker} — Score {top.overall_score:.0f}/100, Signal: {top.signal}
-- Trend: {top.trend_score:.0f} | Momentum: {top.momentum_score:.0f} | Risk: {top.risk_score:.0f}
-- RSI: {top.indicators.get('rsi','N/A')} | ATR%: {top.indicators.get('atr_pct','N/A')}
-
-Stock 2: {second.ticker} — Score {second.overall_score:.0f}/100, Signal: {second.signal}
-- Trend: {second.trend_score:.0f} | Momentum: {second.momentum_score:.0f} | Risk: {second.risk_score:.0f}
-- RSI: {second.indicators.get('rsi','N/A')} | ATR%: {second.indicators.get('atr_pct','N/A')}
-
-In 2 paragraphs, explain why {top.ticker} ranks higher than {second.ticker} based on the technical indicators, and what risk factors each carries. Use language like "higher-ranked based on indicators" not "you should buy".
-"""
-    text = _call_gemini(prompt)
+    text = _call_gemini(_compare_prompt(ranked_stocks))
     if not text:
         return _rule_compare(ranked_stocks)
     return AnalystResponse(explanation=text, ai_powered=True)

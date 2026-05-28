@@ -26,7 +26,7 @@ from typing import Callable, List, Optional, Tuple
 from analysis.integrated_analysis import compute_composite_score
 from analysis.sentiment_analyzer import SentimentAnalyzer
 from analysis.stock_analyzer import StockAnalyzer, SIGNAL_BUY_CANDIDATE, SIGNAL_WATCH
-from analysis.universe import get_universe
+from analysis.universe import get_universe, price_in_range, resolve_scan_universe
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +36,10 @@ SCAN_PRESETS = {
     "💎 S&P 500 Full": "sp500_full",
     "📊 S&P 500 Curated": "sp500",
     "🔥 Day Trading (fast)": "day_trading",
+    "💰 Penny stocks (< $5)": "penny_under_5",
+    "🪙 True pennies (< $1)": "penny_under_1",
+    "💵 $1 – $10 range": "price_1_10",
+    "📉 Under $10": "under_10",
 }
 
 ACTION_STRONG_BUY = "STRONG BUY"
@@ -262,9 +266,8 @@ class StrategySentimentScanner:
         enable_ai_notes: bool = True,
         ai_top_n: Optional[int] = None,
     ) -> StrategySentimentSession:
-        tickers = get_universe(preset)
-        if limit and limit > 0:
-            tickers = tickers[:limit]
+        tickers, min_price, max_price = resolve_scan_universe(preset, result_limit=limit)
+        result_cap = limit if limit and limit > 0 else None
 
         session_id = str(uuid.uuid4())[:8]
         total = len(tickers)
@@ -350,13 +353,21 @@ class StrategySentimentScanner:
                         progress_callback(done[0], total)
                     except Exception:
                         pass
+                if result_cap and len(rows) >= result_cap:
+                    continue
                 try:
                     row = future.result(timeout=90)
-                    if row.is_valid:
-                        rows.append(row)
+                    if not row.is_valid:
+                        continue
+                    if not price_in_range(row.price, min_price, max_price):
+                        continue
+                    rows.append(row)
                 except Exception as exc:
                     ticker = futures[future]
                     logger.debug("Scan failed %s: %s", ticker, exc)
+
+        if result_cap and len(rows) > result_cap:
+            rows = rows[:result_cap]
 
         _rank_rows(rows)
 

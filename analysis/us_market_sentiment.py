@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 from analysis.sentiment_analyzer import SentimentAnalyzer, SentimentResult
-from analysis.universe import get_universe, SECTORS
+from analysis.universe import get_universe, price_in_range, resolve_scan_universe
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,10 @@ US_SENTIMENT_PRESETS = {
     "📈 Robinhood Stocks": "robinhood_stocks",
     "💎 S&P 500": "sp500_full",
     "🔥 Day Trading (fast)": "day_trading",
+    "💰 Penny stocks (< $5)": "penny_under_5",
+    "🪙 True pennies (< $1)": "penny_under_1",
+    "💵 $1 – $10 range": "price_1_10",
+    "📉 Under $10": "under_10",
     "💻 Technology": "sector:technology",
     "🏦 Financials": "sector:financials",
     "🏥 Healthcare": "sector:healthcare",
@@ -124,9 +128,8 @@ class USMarketSentimentScanner:
     ) -> USMarketSentimentSession:
         """Scan US universe and rank by sentiment."""
         session_id = str(uuid.uuid4())[:8]
-        tickers = get_universe(preset)
-        if limit and limit > 0:
-            tickers = tickers[:limit]
+        tickers, min_price, max_price = resolve_scan_universe(preset, result_limit=limit)
+        result_cap = limit if limit and limit > 0 else None
         total = len(tickers)
         t0 = time.time()
         rows: List[USSentimentRow] = []
@@ -180,13 +183,21 @@ class USMarketSentimentScanner:
                         progress_callback(done[0], total)
                     except Exception:
                         pass
+                if result_cap and len(rows) >= result_cap:
+                    continue
                 try:
                     row = future.result(timeout=45)
-                    if row.is_valid and row.overall_score >= self.min_score:
-                        rows.append(row)
+                    if not row.is_valid or row.overall_score < self.min_score:
+                        continue
+                    if not price_in_range(row.price, min_price, max_price):
+                        continue
+                    rows.append(row)
                 except Exception as exc:
                     ticker = futures[future]
                     logger.debug("US sentiment scan failed %s: %s", ticker, exc)
+
+        if result_cap and len(rows) > result_cap:
+            rows = rows[:result_cap]
 
         rows.sort(key=lambda r: r.overall_score, reverse=True)
         top = rows[: self.top_n]
