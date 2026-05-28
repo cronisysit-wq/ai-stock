@@ -1,6 +1,5 @@
 """
-SQLAlchemy database setup with SQLite.
-Structured for easy migration to PostgreSQL later.
+SQLAlchemy database setup for SQLite (local) and PostgreSQL (Railway).
 """
 
 from sqlalchemy import create_engine
@@ -16,14 +15,30 @@ class Base(DeclarativeBase):
     pass
 
 
+def normalize_database_url(url: str) -> str:
+    """Normalize Railway/Heroku-style postgres URLs for SQLAlchemy."""
+    if url.startswith("postgres://"):
+        return "postgresql://" + url[len("postgres://") :]
+    return url
+
+
 def get_engine():
     """Create a SQLAlchemy engine from the current settings."""
     settings = get_settings()
+    database_url = normalize_database_url(settings.DATABASE_URL)
     connect_args = {}
-    if settings.DATABASE_URL.startswith("sqlite"):
+    engine_kwargs = {"echo": False}
+
+    if database_url.startswith("sqlite"):
         connect_args["check_same_thread"] = False
+    else:
+        # Keep connections healthy across Railway restarts / idle timeouts.
+        engine_kwargs["pool_pre_ping"] = True
+
     return create_engine(
-        settings.DATABASE_URL, connect_args=connect_args, echo=False
+        database_url,
+        connect_args=connect_args,
+        **engine_kwargs,
     )
 
 
@@ -36,6 +51,9 @@ def init_db():
     global engine, SessionLocal
     engine = get_engine()
     SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    # Register every ORM model before create_all().
+    import db.models  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
     logger.info("Database initialized successfully")
 
