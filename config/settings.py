@@ -182,6 +182,16 @@ class Settings(BaseSettings):
         default="sqlite:///trading.db", description="SQLAlchemy database URL"
     )
 
+    # ── Scan cache (Strategy Signals + US Market) ─────────────────────────
+    SCAN_CACHE_REFRESH_MINUTES: int = Field(
+        default=5,
+        description="Full background re-scan interval; overwrites cached scan JSON in Postgres",
+    )
+    SCAN_UI_POLL_SECONDS: int = Field(
+        default=30,
+        description="How often the UI reloads to pick up new cached scan results",
+    )
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

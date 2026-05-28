@@ -30,13 +30,19 @@ python -m streamlit run app.py
 
 5. **Settings → Networking → Generate Domain** to get a public URL.
 
-### Optional: PostgreSQL (recommended)
+### PostgreSQL (required for instant scan cache)
 
-SQLite on Railway is ephemeral (resets on redeploy). Add Railway **PostgreSQL** and set:
+Without Postgres, scan results reset on every redeploy. Link Postgres and set on the **app** service:
 
-```
-DATABASE_URL=${{Postgres.DATABASE_URL}}
-```
+| Variable | Value |
+|----------|--------|
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` (Railway reference) |
+| `SCAN_CACHE_REFRESH_MINUTES` | `5` (full scan refresh; overwrites cache row) |
+| `SCAN_UI_POLL_SECONDS` | `30` (UI picks up new cache) |
+
+**How cache works:** Every 5 minutes the server runs a **full new scan** and **updates** one row in `app_settings` (JSON). It does **not** wipe your database — paper trades, logs, and proposals stay. Only the scan snapshot is replaced.
+
+Use the **internal** Postgres URL on Railway (`postgres.railway.internal`) when both services are in the same project.
 
 ### Resource tips
 

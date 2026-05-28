@@ -10,9 +10,8 @@ import pandas as pd
 import time as _time
 
 from ui.auto_scan import (
-    AUTO_REFRESH_SECONDS,
     DEFAULT_SCAN_LIMIT,
-    UI_POLL_SECONDS,
+    get_ui_poll_seconds,
     format_scan_status,
 )
 from ui.scan_service import resolve_strategy_scan
@@ -192,7 +191,7 @@ auto_refresh = st.checkbox(
 if auto_refresh:
     try:
         from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=UI_POLL_SECONDS * 1000, key="ss_autorefresh")
+        st_autorefresh(interval=get_ui_poll_seconds() * 1000, key="ss_autorefresh")
     except ImportError:
         pass
 

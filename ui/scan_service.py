@@ -10,7 +10,7 @@ import time
 from typing import Any, Callable, Optional, Tuple
 
 from analysis.scan_cache import load_scan_cache, save_scan_cache
-from ui.auto_scan import AUTO_REFRESH_SECONDS
+from ui.auto_scan import get_auto_refresh_seconds, get_ui_poll_seconds
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +41,7 @@ def us_cache_key(preset: str, limit: int, top_n: int) -> str:
 def _is_stale(last_ts: Optional[float]) -> bool:
     if not last_ts:
         return True
-    return (time.time() - last_ts) >= AUTO_REFRESH_SECONDS
+    return (time.time() - last_ts) >= get_auto_refresh_seconds()
 
 
 def _start_background(cache_key: str, runner: Callable[[], Any]) -> bool:

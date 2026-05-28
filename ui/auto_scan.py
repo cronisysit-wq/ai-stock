@@ -12,13 +12,32 @@ from typing import Optional
 
 import streamlit as st
 
-AUTO_REFRESH_SECONDS = 5 * 60
+
+def get_auto_refresh_seconds() -> int:
+    try:
+        from config.settings import get_settings
+        return max(1, get_settings().SCAN_CACHE_REFRESH_MINUTES) * 60
+    except Exception:
+        return 5 * 60
+
+
+def get_ui_poll_seconds() -> int:
+    try:
+        from config.settings import get_settings
+        return max(10, get_settings().SCAN_UI_POLL_SECONDS)
+    except Exception:
+        return 30
+
+
+AUTO_REFRESH_SECONDS = 5 * 60  # fallback; prefer get_auto_refresh_seconds()
 UI_POLL_SECONDS = 30
 DEFAULT_SCAN_LIMIT = 250
 
 
-def scan_is_stale(last_scan_ts: Optional[float], *, interval: int = AUTO_REFRESH_SECONDS) -> bool:
+def scan_is_stale(last_scan_ts: Optional[float], *, interval: Optional[int] = None) -> bool:
     """True when no prior scan exists or the refresh interval has elapsed."""
+    if interval is None:
+        interval = get_auto_refresh_seconds()
     if not last_scan_ts:
         return True
     return (time.time() - last_scan_ts) >= interval
@@ -28,10 +47,12 @@ def format_scan_status(
     last_scan_ts: Optional[float],
     auto_refresh: bool,
     *,
-    interval: int = AUTO_REFRESH_SECONDS,
+    interval: Optional[int] = None,
     refreshing: bool = False,
 ) -> str:
     """Human-readable last-updated / next-refresh line for the UI."""
+    if interval is None:
+        interval = get_auto_refresh_seconds()
     if refreshing:
         return "🔄 Background refresh running — showing last saved results"
 
