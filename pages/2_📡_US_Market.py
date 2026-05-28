@@ -18,10 +18,10 @@ import time as _time
 from ui.auto_scan import (
     AUTO_REFRESH_SECONDS,
     DEFAULT_SCAN_LIMIT,
+    UI_POLL_SECONDS,
     format_scan_status,
-    should_run_scan,
-    trigger_autorefresh,
 )
+from ui.scan_service import resolve_us_scan
 
 st.set_page_config(
     page_title="US Market | AI Trading Assistant",
@@ -160,18 +160,20 @@ with c4:
     workers = st.slider("Parallel workers", 4, 16, 10)
 
 auto_refresh = st.checkbox(
-    "Auto-refresh scan every 15 minutes",
+    "Auto-refresh every 5 minutes (background)",
     value=True,
-    help="Re-runs sentiment sweep automatically",
+    help="Server refreshes in background; cached results load instantly.",
 )
 if auto_refresh:
-    trigger_autorefresh(AUTO_REFRESH_SECONDS, key="us_autorefresh")
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=UI_POLL_SECONDS * 1000, key="us_autorefresh")
+    except ImportError:
+        pass
 
 refresh_col1, refresh_col2 = st.columns([1, 3])
 with refresh_col1:
     run_scan = st.button("🔄 Refresh scan now", type="primary", use_container_width=True)
-with refresh_col2:
-    st.caption(format_scan_status(st.session_state.get("us_last_scan_ts"), auto_refresh))
 
 if get_price_bounds(preset) != (None, None):
     st.info(
@@ -179,35 +181,70 @@ if get_price_bounds(preset) != (None, None):
         "selected price range (penny / $1–$10 / under $10)."
     )
 
-do_scan = should_run_scan(
-    session_key="us_sentiment_session",
-    last_ts_key="us_last_scan_ts",
-    force=run_scan,
-    auto_refresh=auto_refresh,
-)
-
-if do_scan:
-    progress = st.progress(0, text="Starting US sentiment sweep...")
+if run_scan:
+    progress = st.progress(0, text="Refreshing US sentiment sweep...")
 
     def _cb(done, total):
         progress.progress(min(1.0, done / max(1, total)), text=f"Analyzing {done}/{total} tickers...")
 
     try:
-        scanner = USMarketSentimentScanner(max_workers=workers, top_n=top_n)
-        session = scanner.scan(preset=preset, progress_callback=_cb, limit=int(scan_limit))
-        st.session_state["us_sentiment_session"] = session
-        st.session_state["us_last_scan_ts"] = _time.time()
-        st.session_state["us_sr_note"] = None
-        progress.empty()
-        st.success(
-            f"✅ Scanned {session.universe_size} tickers in {session.elapsed_seconds}s — "
-            f"{session.scanned} with valid data, top {len(session.results)} ranked"
+        session, last_ts, scan_status = resolve_us_scan(
+            preset=preset,
+            limit=int(scan_limit),
+            top_n=top_n,
+            workers=workers,
+            force=True,
+            auto_refresh=auto_refresh,
+            progress_callback=_cb,
         )
     except Exception as ex:
         progress.empty()
-        st.error(f"Scan failed: {ex}")
-elif st.session_state.get("us_sentiment_session") is None:
-    st.info(f"Loading first scan — **{scan_limit}** tickers from **{preset_label}** (~1–3 min)…")
+        st.error(str(ex))
+        session, last_ts, scan_status = None, None, "missing"
+    else:
+        progress.empty()
+        if session is not None:
+            st.session_state["us_sr_note"] = None
+            st.success(
+                f"✅ Scanned {session.universe_size} tickers in {session.elapsed_seconds}s — "
+                f"{session.scanned} with valid data, top {len(session.results)} ranked"
+            )
+else:
+    try:
+        session, last_ts, scan_status = resolve_us_scan(
+            preset=preset,
+            limit=int(scan_limit),
+            top_n=top_n,
+            workers=workers,
+            force=False,
+            auto_refresh=auto_refresh,
+            progress_callback=None,
+        )
+    except Exception as ex:
+        st.error(str(ex))
+        session, last_ts, scan_status = None, None, "missing"
+
+if session is not None:
+    st.session_state["us_sentiment_session"] = session
+    st.session_state["us_last_scan_ts"] = last_ts
+    st.session_state["us_scan_status"] = scan_status
+
+scan_status = st.session_state.get("us_scan_status", scan_status if session else "missing")
+with refresh_col2:
+    st.caption(
+        format_scan_status(
+            st.session_state.get("us_last_scan_ts"),
+            auto_refresh,
+            refreshing=(scan_status == "refreshing"),
+        )
+    )
+
+if scan_status == "cached":
+    st.caption("⚡ Loaded from saved scan — instant on page refresh.")
+elif scan_status == "refreshing":
+    st.info("🔄 Updating in background — showing last saved market snapshot.")
+elif scan_status == "waiting":
+    st.info("⏳ First scan running on server — auto-reloads every 30s until ready.")
 
 session = st.session_state.get("us_sentiment_session")
 

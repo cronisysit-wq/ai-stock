@@ -12,7 +12,8 @@ from typing import Optional
 
 import streamlit as st
 
-AUTO_REFRESH_SECONDS = 15 * 60
+AUTO_REFRESH_SECONDS = 5 * 60
+UI_POLL_SECONDS = 30
 DEFAULT_SCAN_LIMIT = 250
 
 
@@ -28,10 +29,14 @@ def format_scan_status(
     auto_refresh: bool,
     *,
     interval: int = AUTO_REFRESH_SECONDS,
+    refreshing: bool = False,
 ) -> str:
     """Human-readable last-updated / next-refresh line for the UI."""
+    if refreshing:
+        return "🔄 Background refresh running — showing last saved results"
+
     if not last_scan_ts:
-        return "No scan yet — loading…"
+        return "No cached scan yet — first load may take 1–3 min"
 
     updated = datetime.fromtimestamp(last_scan_ts, tz=timezone.utc).strftime("%H:%M:%S UTC")
     elapsed = int(time.time() - last_scan_ts)

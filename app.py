@@ -7,6 +7,15 @@ Sidebar (6 items):
 
 import streamlit as st
 
+# Start warming default scan caches once per server process (non-blocking).
+if "scan_cache_warmed" not in st.session_state:
+    st.session_state["scan_cache_warmed"] = True
+    try:
+        from ui.scan_service import warm_default_caches
+        warm_default_caches()
+    except Exception:
+        pass
+
 st.set_page_config(
     page_title="AI Trading Assistant",
     page_icon="🤖",

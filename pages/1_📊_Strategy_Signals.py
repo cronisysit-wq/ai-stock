@@ -12,10 +12,10 @@ import time as _time
 from ui.auto_scan import (
     AUTO_REFRESH_SECONDS,
     DEFAULT_SCAN_LIMIT,
+    UI_POLL_SECONDS,
     format_scan_status,
-    should_run_scan,
-    trigger_autorefresh,
 )
+from ui.scan_service import resolve_strategy_scan
 
 st.set_page_config(page_title="Strategy Signals", page_icon="📊", layout="wide")
 
@@ -104,8 +104,7 @@ if st.session_state["risk_manager"] is None and SIZER_OK:
 
 st.title("📊 Strategy Signals + Sentiment")
 st.markdown(
-    "<p class='sub'>S&amp;P 500 scan loads automatically (250 stocks by default) — ranked "
-    "<strong>STRONG BUY first</strong>, then INVEST. Auto-refreshes every 15 minutes.</p>",
+    "<p class='sub'>S&amp;P 500 scan loads from saved cache instantly — auto-refreshes every 5 min in the background.</p>",
     unsafe_allow_html=True,
 )
 st.markdown(
@@ -186,20 +185,22 @@ with c4:
     workers = st.slider("Speed", 4, 16, 10)
 
 auto_refresh = st.checkbox(
-    "Auto-refresh scan every 15 minutes",
+    "Auto-refresh every 5 minutes (background)",
     value=True,
-    help="Re-runs the full scan automatically. Turn off to save API/time on Railway.",
+    help="Server refreshes scan in the background; page shows cached results instantly.",
 )
 if auto_refresh:
-    trigger_autorefresh(AUTO_REFRESH_SECONDS, key="ss_autorefresh")
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=UI_POLL_SECONDS * 1000, key="ss_autorefresh")
+    except ImportError:
+        pass
 
 refresh_col1, refresh_col2, refresh_col3 = st.columns([2, 1, 2])
 with refresh_col1:
     scan_clicked = st.button("🔄 Refresh scan now", type="primary", use_container_width=True)
 with refresh_col2:
     refresh_prices = st.button("↻ Prices only", use_container_width=True)
-with refresh_col3:
-    st.caption(format_scan_status(st.session_state.get("ss_last_scan_ts"), auto_refresh))
 
 ai_col1, ai_col2 = st.columns([1, 3])
 with ai_col1:
@@ -230,43 +231,77 @@ if universe_count > 1000 and scan_all:
         f"Use **Limit** 250–500 for daily scans."
     )
 
-run_scan = should_run_scan(
-    session_key="ss_session",
-    last_ts_key="ss_last_scan_ts",
-    force=scan_clicked,
-    auto_refresh=auto_refresh,
-)
+run_scan = scan_clicked
+actual_limit = None if scan_all else int(limit)
 
 if run_scan:
-    progress = st.progress(0, text="Starting scan…")
-    actual_limit = None if scan_all else int(limit)
+    progress = st.progress(0, text="Refreshing scan…")
 
     def _cb(d, t):
         progress.progress(d / max(1, t), text=f"Strategy + sentiment: {d}/{t}")
 
     try:
-        scanner = StrategySentimentScanner(max_workers=workers)
-        session = scanner.scan(
+        session, last_ts, scan_status = resolve_strategy_scan(
             preset=st.session_state["ss_preset"],
             limit=actual_limit,
-            progress_callback=_cb,
+            scan_all=scan_all,
             enable_ai_notes=enable_ai_notes,
-        )
-        st.session_state["ss_session"] = session
-        st.session_state["ss_last_scan_ts"] = _time.time()
-        progress.empty()
-        ai_msg = ""
-        if session.ai_notes_count:
-            ai_msg = f" · **{session.ai_notes_count}** AI notes ({session.ai_scan_provider})"
-        st.success(
-            f"Done in {session.elapsed_seconds}s — {session.scanned}/{session.universe_size} ranked · "
-            f"**{session.strong_buy_count}** STRONG BUY · **{session.invest_count}** INVEST{ai_msg}"
+            workers=workers,
+            force=True,
+            auto_refresh=auto_refresh,
+            progress_callback=_cb,
         )
     except Exception as ex:
         progress.empty()
         st.error(str(ex))
+        session, last_ts, scan_status = None, None, "missing"
+    else:
+        progress.empty()
+        if session is not None:
+            ai_msg = ""
+            if session.ai_notes_count:
+                ai_msg = f" · **{session.ai_notes_count}** AI notes ({session.ai_scan_provider})"
+            st.success(
+                f"Done in {session.elapsed_seconds}s — {session.scanned}/{session.universe_size} ranked · "
+                f"**{session.strong_buy_count}** STRONG BUY · **{session.invest_count}** INVEST{ai_msg}"
+            )
+else:
+    try:
+        session, last_ts, scan_status = resolve_strategy_scan(
+            preset=st.session_state["ss_preset"],
+            limit=actual_limit,
+            scan_all=scan_all,
+            enable_ai_notes=enable_ai_notes,
+            workers=workers,
+            force=False,
+            auto_refresh=auto_refresh,
+            progress_callback=None,
+        )
+    except Exception as ex:
+        st.error(str(ex))
+        session, last_ts, scan_status = None, None, "missing"
 
-session = st.session_state.get("ss_session")
+scan_status = st.session_state.get("ss_scan_status", scan_status if session else "missing")
+with refresh_col3:
+    st.caption(
+        format_scan_status(
+            st.session_state.get("ss_last_scan_ts"),
+            auto_refresh,
+            refreshing=(scan_status == "refreshing"),
+        )
+    )
+
+if session is not None:
+    st.session_state["ss_session"] = session
+    st.session_state["ss_last_scan_ts"] = last_ts
+    st.session_state["ss_scan_status"] = scan_status
+
+if scan_status == "cached":
+    st.caption("⚡ Loaded from saved scan — no wait on page refresh.")
+elif scan_status == "refreshing":
+    st.info("🔄 Updating in background — table shows last saved results until refresh completes.")
+elif scan_status == "waiting":
+    st.info("⏳ First scan in progress on server — reload in ~30s.")
 
 if session and refresh_prices and session.results:
     with st.spinner("Refreshing live prices for top 100..."):
