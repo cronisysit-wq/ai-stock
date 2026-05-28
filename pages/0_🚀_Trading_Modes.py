@@ -270,10 +270,15 @@ with e1:
 with e2:
     auto_sel = st.session_state["tm_exec"] == ExecutionPreference.AUTO
     auto_ok = SETTINGS_OK and settings and settings.ENABLE_AUTO_MODE
+    auto_status = (
+        ' · <span style="color:#00C853">enabled</span>'
+        if auto_ok
+        else ' · <span style="color:#FF1744">set ENABLE_AUTO_MODE=true</span>'
+    )
     st.markdown(
         f"<div class='mode-card {'mode-active' if auto_sel else ''}'>"
         f"<strong>🤖 Auto</strong> — Scan → top BUY picks auto-execute (paper)"
-        f"{' · <span style=\"color:#00C853\">enabled</span>' if auto_ok else ' · <span style=\"color:#FF1744\">set ENABLE_AUTO_MODE=true</span>'}"
+        f"{auto_status}"
         f"</div>",
         unsafe_allow_html=True,
     )
